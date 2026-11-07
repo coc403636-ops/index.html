@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lua Obfuscator</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f0f1a;
+    color: #e0e0e0;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  header h1 {
+    font-size: 28px;
+    background: linear-gradient(90deg, #a855f7, #3b82f6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 700;
+  }
+  header p { color: #888; font-size: 14px; margin-top: 6px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 768px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .panel {
+    background: #1a1a2e;
+    border: 1px solid #2d2d44;
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel-header {
+    padding: 10px 14px;
+    background: #16162a;
+    border-bottom: 1px solid #2d2d44;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: #a0a0b0;
+  }
+  .panel-header .size { font-weight: 400; color: #666; font-size: 12px; }
+  textarea {
+    flex: 1;
+    min-height: 380px;
+    background: #0d0d18;
+    color: #e0e0e0;
+    border: none;
+    padding: 14px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+  }
+  .controls {
+    margin: 16px 0;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary {
+    background: linear-gradient(135deg, #a855f7, #3b82f6);
+    color: white;
+  }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+  .btn-secondary {
+    background: #2d2d44;
+    color: #d0d0e0;
+  }
+  .btn-secondary:hover:not(:disabled) { background: #3a3a55; }
+  .btn-success { background: #16a34a; color: white; }
+  .btn-success:hover:not(:disabled) { background: #15803d; }
+  .stats {
+    text-align: center;
+    font-size: 13px;
+    color: #888;
+    margin: 8px 0;
+    min-height: 20px;
+  }
+  .stats strong { color: #a855f7; }
+  .status { color: #16a34a; font-weight: 600; }
+  .status.error { color: #ef4444; }
+  footer {
+    text-align: center;
+    margin-top: 30px;
+    color: #555;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>🔒 Lua Obfuscator</h1>
+    <p>Dán code Lua → Obfuscate → Copy kết quả</p>
+  </header>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="panel-header">
+        <span>Input (Lua)</span>
+        <span class="size" id="inSize">0 ký tự</span>
+      </div>
+      <textarea id="input" placeholder="-- Dán code Lua của bạn vào đây...
+local greet = &quot;Hello&quot;
+local function sayHello(name)
+  print(greet .. &quot; &quot; .. name)
+end
+sayHello(&quot;World&quot;)"></textarea>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>Output (Obfuscated)</span>
+        <span class="size" id="outSize">0 ký tự</span>
+      </div>
+      <textarea id="output" readonly placeholder="Kết quả sẽ xuất hiện ở đây..."></textarea>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn-primary" onclick="runObfuscate()">⚡ Obfuscate</button>
+    <button class="btn-success" id="copyBtn" onclick="copyOutput()" disabled>📋 Copy</button>
+    <button class="btn-secondary" onclick="downloadOutput()" id="dlBtn" disabled>💾 Download .lua</button>
+    <button class="btn-secondary" onclick="clearAll()">🗑️ Clear</button>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <footer>
+    Made with ❤️ — Chỉ dùng cho mục đích học tập / bảo vệ code hợp pháp.
+  </footer>
+</div>
+
+<script>
+// ============================================================
+// TOKENIZER
+// ============================================================
+const KEYWORDS = new Set([
+  'and','break','do','else','elseif','end','false','for','function','if','in',
+  'local','nil','not','or','repeat','return','then','true','until','while',
+  'goto','continue','export','type','typeof'
+]);
+const BLACKLIST = new Set(['self','_G','_ENV','_G','...']);
+
+function tokenize(code) {
+  const tokens = [];
+  let i = 0, n = code.length;
+  while (i < n) {
+    const ch = code[i];
+
+    // whitespace
+    if (/\s/.test(ch)) {
+      let s = i;
+      while (i < n && /\s/.test(code[i])) i++;
+      tokens.push({ type: 'ws', value: code.slice(s, i) });
+      continue;
+    }
+
+    // comments
+    if (ch === '-' && code[i+1] === '-') {
+      if (code[i+2] === '[') {
+        const eq = matchLongBracket(code, i+2);
+        if (eq !== null) {
+          const close = ']' + '='.repeat(eq) + ']';
+          const end = code.indexOf(close, i + 2 + eq + 2);
+          if (end === -1) { tokens.push({type:'comment', value: code.slice(i)}); i = n; }
+          else { const e = end + close.length; tokens.push({type:'comment', value: code.slice(i, e)}); i = e; }
+          continue;
+        }
+      }
+      let end = code.indexOf('\n', i);
+      if (end === -1) end = n;
+      tokens.push({ type: 'comment', value: code.slice(i, end) });
+      i = end;
+      continue;
+    }
+
+    // long strings
+    if (ch === '[') {
+      const eq = matchLongBracket(code, i);
+      if (eq !== null) {
+        const close = ']' + '='.repeat(eq) + ']';
+        const s = i + eq + 2;
+        const end = code.indexOf(close, s);
+        if (end === -1) { tokens.push({type:'string', value: code.slice(i)}); i = n; }
+        else { const e = end + close.length; tokens.push({type:'string', value: code.slice(i, e)}); i = e; }
+        continue;
+      }
+    }
+
+    // short strings
+    if (ch === '"' || ch === "'") {
+      const q = ch;
+      let j = i + 1;
+      while (j < n) {
+        if (code[j] === '\\') { j += 2; continue; }
+        if (code[j] === q) { j++; break; }
+        if (code[j] === '\n') break;
+        j++;
+      }
+      tokens.push({ type: 'string', value: code.slice(i, j) });
+      i = j;
+      continue;
+    }
+
+    // numbers
+    if (/[0-9]/.test(ch) || (ch === '.' && /[0-9]/.test(code[i+1] || ''))) {
+      let j = i;
+      if (ch === '0' && (code[i+1] === 'x' || code[i+1] === 'X')) {
+        j = i + 2;
+        while (j < n && /[0-9a-fA-F]/.test(code[j])) j++;
+        if (code[j] === '.') { j++; while (j < n && /[0-9a-fA-F]/.test(code[j])) j++; }
+        if (code[j] === 'p' || code[j] === 'P') { j++; if (code[j]==='+'||code[j]==='-') j++; while (j<n && /[0-9]/.test(code[j])) j++; }
+      } else {
+        while (j < n && /[0-9]/.test(code[j])) j++;
+        if (code[j] === '.') { j++; while (j < n && /[0-9]/.test(code[j])) j++; }
+        if (code[j] === 'e' || code[j] === 'E') { j++; if (code[j]==='+'||code[j]==='-') j++; while (j<n && /[0-9]/.test(code[j])) j++; }
+      }
+      tokens.push({ type: 'number', value: code.slice(i, j) });
+      i = j;
+      continue;
+    }
+
+    // identifiers / keywords
+    if (/[a-zA-Z_]/.test(ch)) {
+      let j = i;
+      while (j < n && /[a-zA-Z0-9_]/.test(code[j])) j++;
+      const w = code.slice(i, j);
+      tokens.push({ type: KEYWORDS.has(w) ? 'keyword' : 'ident', value: w });
+      i = j;
+      continue;
+    }
+
+    // multi-char operators
+    const ops = ['...','..=','..','==','~=','<=','>=','::','->','//=','//','<<','>>','+=','-=','*=','/=','%=','^=','&=','|=','<<=','>>='];
+    let matched = false;
+    for (const op of ops) {
+      if (code.substr(i, op.length) === op) {
+        tokens.push({ type: 'symbol', value: op });
+        i += op.length;
+        matched = true;
+        break;
+      }
+    }
+    if (matched) continue;
+
+    tokens.push({ type: 'symbol', value: ch });
+    i++;
+  }
+  return tokens;
+}
+
+function matchLongBracket(code, start) {
+  let i = start + 1, eq = 0;
+  while (code[i] === '=') { eq++; i++; }
+  return code[i] === '[' ? eq : null;
+}
+
+// ============================================================
+// STRING ENCODING
+// ============================================================
+function parseLuaString(tok) {
+  const q = tok[0];
+  const content = tok.slice(1, -1);
+  let result = '';
+  let i = 0;
+  while (i < content.length) {
+    const c = content[i];
+    if (c !== '\\') { result += c; i++; continue; }
+    const next = content[i+1];
+    switch (next) {
+      case 'n': result += '\n'; i+=2; break;
+      case 't': result += '\t'; i+=2; break;
+      case 'r': result += '\r'; i+=2; break;
+      case 'a': result += '\x07'; i+=2; break;
+      case 'b': result += '\b'; i+=2; break;
+      case 'f': result += '\f'; i+=2; break;
+      case 'v': result += '\v'; i+=2; break;
+      case '\\': result += '\\'; i+=2; break;
+      case '"': result += '"'; i+=2; break;
+      case "'": result += "'"; i+=2; break;
+      case '\n': result += '\n'; i+=2; break;
+      case '\r': result += '\n'; i+=2; if (content[i]==='\n') i++; break;
+      case 'z': i+=2; while (i < content.length && /\s/.test(content[i])) i++; break;
+      case 'x': {
+        const hex = content.substr(i+2, 2);
+        result += String.fromCharCode(parseInt(hex, 16));
+        i += 4; break;
+      }
+      case 'u': {
+        if (content[i+2] === '{') {
+          const e = content.indexOf('}', i+3);
+          const hex = content.substring(i+3, e);
+          try { result += String.fromCodePoint(parseInt(hex, 16)); } catch(e) {}
+          i = e + 1;
+        } else { result += 'u'; i += 2; }
+        break;
+      }
+      default: {
+        if (/[0-9]/.test(next)) {
+          let num = '';
+          let j = i + 1;
+          while (j < content.length && /[0-9]/.test(content[j]) && num.length < 3) {
+            num += content[j]; j++;
+          }
+          result += String.fromCharCode(parseInt(num, 10));
+          i = j;
+        } else { result += next; i += 2; }
+      }
+    }
+  }
+  return result;
+}
+
+function encodeLuaStringValue(str) {
+  let out = '"';
+  for (const char of str) {
+    const c = char.codePointAt(0);
+    if (c < 256) out += '\\' + c.toString().padStart(3, '0');
+    else out += '\\u{' + c.toString(16) + '}';
+  }
+  return out + '"';
+}
+
+function encodeStringToken(tok) {
+  if (!tok.startsWith('"') && !tok.startsWith("'")) return tok; // long string
+  return encodeLuaStringValue(parseLuaString(tok));
+}
+
+// ============================================================
+// OBFUSCATOR
+// ============================================================
+function obfuscate(code) {
+  const tokens = tokenize(code);
+
+  // --- Pass 1: collect local names ---
+  const localNames = new Set();
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+
+    // `local ...`
+    if (t.type === 'keyword' && t.value === 'local') {
+      let j = i + 1;
+      while (j < tokens.length && tokens[j].type === 'ws') j++;
+      // local function name(...)
+      if (tokens[j] && tokens[j].type === 'keyword' && tokens[j].value === 'function') {
+        j++;
+        while (j < tokens.length && tokens[j].type === 'ws') j++;
+        if (tokens[j] && tokens[j].type === 'ident' && !BLACKLIST.has(tokens[j].value)) {
+          localNames.add(tokens[j].value);
+        }
+        continue;
+      }
+      // local a, b = ...
+      while (j < tokens.length) {
+        const tk = tokens[j];
+        if (tk.type === 'ws') { j++; continue; }
+        if (tk.type === 'ident') {
+          if (!BLACKLIST.has(tk.value)) localNames.add(tk.value);
+          j++;
+          // skip <generics>
+          if (tokens[j] && tokens[j].value === '<') {
+            let d = 1; j++;
+            while (j < tokens.length && d > 0) {
+              if (tokens[j].value === '<') d++;
+              else if (tokens[j].value === '>') d--;
+              j++;
+            }
+          }
+          continue;
+        }
+        if (tk.type === 'symbol' && tk.value === ',') { j++; continue; }
+        break;
+      }
+    }
+
+    // `function name(params)`
+    if (t.type === 'keyword' && t.value === 'function') {
+      let j = i + 1;
+      while (j < tokens.length) {
+        if (tokens[j].type === 'symbol' && tokens[j].value === '(') break;
+        if (tokens[j].type === 'keyword' && tokens[j].value === 'end') break;
+        j++;
+      }
+      if (tokens[j] && tokens[j].value === '(') {
+        j++;
+        while (j < tokens.length && !(tokens[j].type === 'symbol' && tokens[j].value === ')')) {
+          if (tokens[j].type === 'ident' && !BLACKLIST.has(tokens[j].value)) {
+            localNames.add(tokens[j].value);
+          }
+          j++;
+        }
+      }
+    }
+  }
+
+  // --- Pass 2: build mangled names ---
+  const mapping = new Map();
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let counter = 0;
+  for (const name of localNames) {
+    if (BLACKLIST.has(name)) continue;
+    let suffix = '';
+    let c = counter;
+    do {
+      suffix = chars[c % chars.length] + suffix;
+      c = Math.floor(c / chars.length);
+    } while (c > 0);
+    mapping.set(name, '_' + suffix);
+    counter++;
+  }
+
+  // --- Pass 3: rebuild output ---
+  let output = '';
+  let prevType = null, prevOut = '';
+
+  const needsSpace = (pt, po, ct, cv) => {
+    if (!pt) return false;
+    const wordy = new Set(['ident','keyword','number']);
+    if (wordy.has(pt) && wordy.has(ct)) return true;
+    if (pt === 'string' && wordy.has(ct)) return true;
+    if (wordy.has(pt) && ct === 'string') return true;
+    if (pt === 'symbol' && po === '-' && ct === 'symbol' && cv.startsWith('-')) return true;
+    if (pt === 'number' && ct === 'symbol' && cv.startsWith('.')) return true;
+    return false;
+  };
+
+  for (const t of tokens) {
+    if (t.type === 'ws' || t.type === 'comment') continue;
+
+    let out;
+    if (t.type === 'ident' && mapping.has(t.value)) out = mapping.get(t.value);
+    else if (t.type === 'string') out = encodeStringToken(t.value);
+    else out = t.value;
+
+    if (needsSpace(prevType, prevOut, t.type, out)) output += ' ';
+    output += out;
+    prevType = t.type;
+    prevOut = out;
+  }
+
+  return output;
+}
+
+// ============================================================
+// UI
+// ============================================================
+const inputEl  = document.getElementById('input');
+const outputEl = document.getElementById('output');
+const statsEl  = document.getElementById('stats');
+const inSizeEl = document.getElementById('inSize');
+const outSizeEl= document.getElementById('outSize');
+const copyBtn  = document.getElementById('copyBtn');
+const dlBtn    = document.getElementById('dlBtn');
+
+inputEl.addEventListener('input', () => {
+  inSizeEl.textContent = inputEl.value.length + ' ký tự';
+});
+
+function runObfuscate() {
+  const src = inputEl.value;
+  if (!src.trim()) {
+    statsEl.innerHTML = '<span class="status error">⚠️ Chưa có code để obfuscate</span>';
+    return;
+  }
+  try {
+    const t0 = performance.now();
+    const result = obfuscate(src);
+    const t1 = performance.now();
+    outputEl.value = result;
+    outSizeEl.textContent = result.length + ' ký tự';
+    copyBtn.disabled = false;
+    dlBtn.disabled = false;
+    const ratio = src.length ? Math.round((1 - result.length / src.length) * 100) : 0;
+    statsEl.innerHTML = `✅ Hoàn thành trong <strong>${(t1-t0).toFixed(1)}ms</strong> · ` +
+      `Kích thước: <strong>${src.length}</strong> → <strong>${result.length}</strong> ` +
+      `(${ratio >= 0 ? 'giảm' : 'tăng'} <strong>${Math.abs(ratio)}%</strong>)`;
+  } catch (e) {
+    statsEl.innerHTML = `<span class="status error">❌ Lỗi: ${e.message}</span>`;
+  }
+}
+
+function copyOutput() {
+  const txt = outputEl.value;
+  if (!txt) return;
+  navigator.clipboard.writeText(txt).then(() => {
+    const old = copyBtn.textContent;
+    copyBtn.textContent = '✅ Đã copy!';
+    setTimeout(() => copyBtn.textContent = old, 1500);
+  }).catch(() => {
+    outputEl.select();
+    document.execCommand('copy');
+  });
+}
+
+function downloadOutput() {
+  const txt = outputEl.value;
+  if (!txt) return;
+  const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'obfuscated.lua';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function clearAll() {
+  inputEl.value = '';
+  outputEl.value = '';
+  inSizeEl.textContent = '0 ký tự';
+  outSizeEl.textContent = '0 ký tự';
+  statsEl.innerHTML = '';
+  copyBtn.disabled = true;
+  dlBtn.disabled = true;
+}
+</script>
+</body>
+</html>
